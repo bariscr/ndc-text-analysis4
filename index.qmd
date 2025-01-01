@@ -1,0 +1,361 @@
+---
+title: "Nationally Determined Contributions (NDC) Text Analysis"
+format: html
+execute: 
+  echo: true
+  warning: false
+  eval: true
+embed-resources: true
+---
+.
+This exercise aims to analyze the data from the reports on Nationally Determined Contributions (NDC) of seven Caribbean countries. The reports are in pdf files, which are read by the tessaeract package and processed for analysis. The text is tokenized and analyzed for n-grams, word frequency, and other relevant information. 
+
+Loading the required libraries.
+
+```{r}
+# Libraries
+library(dplyr)
+library(magick)
+library(pdftools)
+library(reactable)
+library(stringr) 
+library(tesseract)
+library(tidyr) 
+library(tidytext) 
+library(widyr)
+library(wordcloud2)
+
+```
+
+Create a dictionary to map country abbreviations to full country names.
+
+```{r}
+dict_country <- data.frame(
+    country_abbr = c("antigua", "barbados", "dominica", "grenada", "lucia", "vincent", "kitts"),
+    country_name = c("Antigua and Barbuda", "Barbados", "Dominica", "Grenada", "Saint Lucia", "Saint Vincent and the Grenadines", "St. Kitts and Nevis"))
+```
+
+
+Read the pdf files for all countries and create a dataframe with the text.
+
+You don't need to run this code block. The data is already saved as an RDS file and can be loaded in the next code block.
+
+```{r}
+#| eval: false
+# Function to read text from PDF using Tesseract
+read_pdf_tesseract <- function(pdf_path) {
+  # Load the PDF
+  pdf_info <- pdf_info(pdf_path)
+  num_pages <- pdf_info$pages
+
+  all_text <- ""
+  
+  for (page in 1:num_pages) {
+    # Convert PDF page to image
+    pdf_image <- pdf_render_page(pdf_path, page = page, dpi = 300)
+    img <- image_read(pdf_image)
+    
+    # Perform OCR on the image
+    text <- ocr(img)
+    all_text <- paste(all_text, text, sep = "\n")
+  }
+  
+  return(all_text)
+}
+
+# Specify the path to your PDF file
+pdf_file_antigua <- "docs/ATG - UNFCCC NDC - 2021-09-02 - Final.pdf"
+pdf_file_barbados <- "docs/2021 Barbados NDC update - 21 July 2021.pdf"
+pdf_file_dominica <- "docs/The Commonwealth of Dominica updated NDC July 4 ,.pdf"
+pdf_file_grenada <- "docs/GrenadaSecondNDC2020 - 01-12-20.pdf"
+pdf_file_saint_lucia <- "docs/Saint Lucia First NDC (Updated submission).pdf"
+pdf_file_saint_vincent <- "docs/Saint Vincent and the Grenadines_NDC.pdf"
+pdf_file_st_kitts <- "docs/St. Kitts and Nevis Revised NDC_Updated.pdf"
+
+pdf_files <- c(pdf_file_antigua, pdf_file_barbados, pdf_file_dominica, pdf_file_grenada, pdf_file_saint_lucia, pdf_file_saint_vincent, pdf_file_st_kitts)
+
+# Read text from the PDF
+pdf_texts <- list()
+
+for (pdf_file in pdf_files) {
+  pdf_text <- read_pdf_tesseract(pdf_file)
+
+  pdf_texts[[pdf_file]] <- pdf_text
+  print(pdf_file)
+}
+
+pdf_texts |> names()
+pdf_texts2 <- pdf_texts
+
+names(pdf_texts2) <- dict_country$country_abbr
+
+pdf_texts2 |> names()
+
+
+dim(pdf_texts2[[1]])
+typeof(pdf_texts2[[1]])
+
+df2 <- data.frame()
+
+for (i in 1:length(pdf_texts2)) {
+
+    df <- data.frame(country = names(pdf_texts2)[[i]], 
+                     text = pdf_texts2[[i]]) 
+    
+    df2 <- df2 |> bind_rows(df)
+}
+
+dim(df2)
+
+#saveRDS(df2, "data/ndc_pdf_text.rds")
+
+```
+
+Read the previously processed and saved RDS dataframe and then create tidy dataframes for n-grams and sentences for analysis.
+
+```{r}
+df2 <- readRDS("data/ndc_pdf_text.rds") 
+
+df_tidy_n1 <- 
+  df2 |>
+  unnest_tokens(word, text) |> 
+  mutate(ngram = 1)
+
+df_tidy_n2 <- 
+  df2 |>
+  unnest_tokens(word, text, token = "ngrams", n = 2) |> 
+  mutate(ngram = 2)
+
+df_tidy_n3 <- 
+  df2 |>
+  unnest_tokens(word, text, token = "ngrams", n = 3) |> 
+  mutate(ngram = 3)
+
+df_tidy <- 
+    df_tidy_n1 |>
+    bind_rows(df_tidy_n2, df_tidy_n3) |> 
+    left_join(dict_country, by = c("country" = "country_abbr"))
+
+df_sentence <- 
+    df2 |> 
+    unnest_tokens(sentence, text, token = "sentences") 
+```
+
+Have a look at the sentence dataframe.
+
+```{r}
+df_sentence |> head(1000) |> reactable()
+```
+
+Exclude stop words and other words that are not relevant for the analysis.
+
+```{r}
+data("stop_words") # from tidytext 
+
+stop_words_selected <- 
+  c("1", "2", "3", "4", "15",
+    "antigua", "barbuda", "7", "barbados", "the commonwealth",
+    "5", "6", "ae", "ee",
+    "vincent", "grenadines", "st", "saint",
+    "kitts", "dominica", "nevis", "lucia",
+    "grenada", "lucia’s", "to the", "of the", 
+    "and the", "in the", "the commonwealth of", "for the",
+    "nationally determined",
+    "nationally determined contribution",
+    "nationally determined contributions",
+    "ndc",
+    "ndcs",
+    "nationally",
+    "national",
+    "grenada's",
+    "grenada’s",
+    "determined"
+)
+
+df_tidy2 <- 
+    df_tidy |> 
+    anti_join(stop_words) |> 
+    filter(!word %in% stop_words_selected) |> 
+    filter(!str_detect(word, "kitts|greanada|barbados|nevis|vincent|lucia|grenadines|dominica|saint|antigua|barbuda")) 
+
+df_tidy_wc <- 
+    df_tidy_n1 |> 
+    anti_join(stop_words) |> 
+    filter(!word %in% stop_words_selected) |> 
+    filter(!str_detect(word, "kitts|greanada|barbados|nevis|vincent|lucia|grenadines|dominica|saint|antigua|barbuda")) 
+
+```
+
+# Wordclouds
+
+For each country, create a wordcloud of the most frequent words in the dataframe.
+
+```{r}
+#| eval: false
+library(wordcloud2)
+
+
+wordclouds2 <- list()
+for (i in 1:7) {
+  word_data <- df_tidy2 |>
+    filter(country == dict_country$country_abbr[i]) |>
+    count(word) |>
+    slice_max(n, n = 30)
+    
+  wc <- wordcloud2(
+    word_data, 
+    size = 0.5, 
+    backgroundColor = "white", 
+    color = "random-dark",
+    widget_id = paste0("wordcloud_", i)  # Only works in dev version
+  )
+  
+  wordclouds2[[i]] <- tagList(
+    h2(dict_country$country_name[i]),
+    div(style = "height: 400px;", wc)
+  )
+}
+
+browsable(tagList(wordclouds2))
+
+
+
+```
+
+
+```{r}
+
+library(ggwordcloud)
+library(ggplot2)
+
+# We'll store each plot in a list
+plot_list <- list()
+
+for (i in seq_len(nrow(dict_country))) {
+  # Summarize data
+  word_data <- df_tidy_wc |>
+    filter(country == dict_country$country_abbr[i]) |>
+    count(word, name = "freq") |>               # rename 'n' -> 'freq'
+    slice_max(freq, n = 30)
+
+  # Build the ggwordcloud
+  p <- ggplot(word_data, aes(label = word, size = freq, color = freq)) +
+    geom_text_wordcloud() +
+    scale_size_area(max_size = 15) +
+    theme_minimal() +
+    ggtitle(dict_country$country_name[i])       # optional title
+
+  # Store in our list
+  plot_list[[i]] <- p
+}
+
+# Print all plots, one below the other
+for (i in seq_along(plot_list)) {
+  print(plot_list[[i]])
+}
+
+
+```
+
+Focus on specific words and create a table with the frequency of these words for each country.
+
+```{r}
+search_elements <- c(
+    "energy sector",
+    "energy",
+    "lulucf sector",
+    "lulucf",
+    "land use",
+    "forestry",
+    "forest", 
+    "forests",
+    "wetlands",
+    "watershed",
+    "agriculture sector",
+    "agriculture",
+    "gender",
+    "adaptation", 
+    "waste sector",
+    "waste",
+    "ippu",
+    "industrial processes",
+    "industrial processes and product use",
+    "product use",
+    "just transition",
+    "transition",
+    "urban",
+    "health",
+    "loss and damage",
+    "children",
+    "young people",
+    "young",
+    "youth",
+    "circular economy",
+    "circular",
+    "green economy",
+    "blue economy",
+    "finance",
+    "climate action",
+    "voluntary cooperation",
+    "voluntary",
+    "mitigation", 
+    "transparency", 
+    "oceans", 
+    "biodiversity", 
+    "climate change")
+
+df_search2 <- data.frame()
+
+for (i in 1:length(search_elements)) {
+
+df_search <- 
+    df_tidy2 |> 
+    filter(word == search_elements[i]) |>
+    group_by(country_name) |>
+    count() |> 
+    mutate(search_element = search_elements[i])
+
+df_search2 <- df_search2 |> bind_rows(df_search)
+
+}
+
+df_search2 |> pivot_wider(names_from = search_element, values_from = n) |> reactable()
+
+```
+
+
+
+```{r}
+df_tidy2 |> filter(str_detect(word, "voluntary")) 
+
+df_tidy2 |> 
+    filter(str_detect(word, "mitigation")) |> 
+    filter(ngram > 1) |>
+    reactable()
+
+df_sentence |> 
+    filter(str_detect(sentence, "adaptation")) |>
+    reactable()
+
+df_sentence |> 
+  filter(country == "lucia") |> 
+  filter(str_detect(sentence, "voluntary")) |>
+  reactable()
+
+```
+
+```{r}
+reactable_list <- list()
+country_list <- dict_country$country_abbr
+
+for (i in 1:7) {
+
+reactable_list[[i]] <-
+  df_sentence |> 
+  filter(country == country_list[[i]]) |> 
+  filter(str_detect(sentence, "voluntary")) |>
+  reactable()
+
+}
+
+```
